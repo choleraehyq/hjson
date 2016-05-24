@@ -5,26 +5,154 @@
 
 namespace hjson {
 
-namespace qi = boost::spirit::qi;
 namespace spirit = boost::spirit;
+namespace qi = boost::spirit::qi;
+namespace karma = boost::spirit::karma;
 
 template <typename InputIterator>
-struct json_grammar: qi::grammar<InputIterator, json_object(), boost::spirit::ascii::space_type> {
-    json_grammar(): json_grammar::base_type(json_object_) {
-        json_object_ = qi::lit('{') 
-                    >> -(json_pair_ % ',')
-                    >> qi::lit('}')
-                    ;
-        json_pair_ = 
-        json_string_ %= qi::omit[ qi::char_("\"'")[ spirit::_a = _1 ]]
-                     >> qi::lexeme[ *(qi::char_ - qi::char_(spirit::_a) ) ]
-                     >> qi::omit[ qi::char_(spirit::_a) ]
-                     ;
-        json_number_ = qi::int_
-                     | qi::double_
-                     ;
-        json_name_ = qi::lexeme[ ]
+struct commentSkipper: qi::grammar<InputIterator> {
+    commentSkipper(): commentSkipper::base_type(rule) {
+        comment = qi::space
+             | "//" >> *(qi::char_('\n', '\r')) >> -qi::eol
+             | "/*" >> *(qi::char_ - "*/") >> "*/"
+             ;
     }
-}    
-    
+    qi::rule<InputIterator> comment;
 }
+
+template <typename InputIterator, typename Skipper>
+struct json_grammar: qi::grammar<InputIterator, Value(), Skipper> {
+    
+    json_grammar(): json_grammar::base_type(json) {
+        
+        __symbols.add
+            ("true", literal("true"))
+            ("false", literal("false"))
+            ("null", literal("null"));
+        
+        __value = __symbols
+                | __object
+                | __array
+                | __number
+                | __string
+                ;
+        
+        __object = '{'
+                >> -(__pair % ',')
+                >> '}'
+                ;
+        __pair = __string 
+                >> ':'
+                >> _value
+                ;
+                
+        __array = '['
+                >> -(_value % ',')
+                >> ']'
+                ;
+                
+        __number = qi::lexeme [ qi::int_ >> qi::char_(".e0-9") ]
+                 | qi::double_
+                 ;
+                 
+        __string = qi::lexeme [ '"' >> *__char >> '"']
+                 ;
+        // TODO Unicode supporting
+        __char = +(~qi::char_('"', '\\')) [ qi::_val += qi::_1 ] 
+               | qi::char_('\\') >>                     
+                    ( qi::char_('"') [ qi::_val += '"'  ] 
+                    | qi::char_('\\') [ qi::_val += '\\' ] 
+                    | qi::char_('/') [ qi::_val += '/'  ] 
+                    | qi::char_('b') [ qi::_val += '\b' ] 
+                    | qi::char_('f') [ qi::_val += '\f' ] 
+                    | qi::char_('n') [ qi::_val += '\n' ] 
+                    | qi::char_('r') [ qi::_val += '\r' ] 
+                    | qi::char_('t') [ qi::_val += '\t' ] 
+                    )
+                ;
+                 
+        json = __value
+             ;
+
+        BOOST_SPIRIT_DEBUG_NODES(__symbols);
+        BOOST_SPIRIT_DEBUG_NODES(__pair);
+        BOOST_SPIRIT_DEBUG_NODES(__value);
+        BOOST_SPIRIT_DEBUG_NODES(__object);
+        BOOST_SPIRIT_DEBUG_NODES(__array);
+        BOOST_SPIRIT_DEBUG_NODES(__number);
+        BOOST_SPIRIT_DEBUG_NODES(__string);
+        BOOST_SPIRIT_DEBUG_NODES(__char);
+    
+    }
+    
+    qi::symbols<std::string, literal> __symbols;
+    qi::rule<It, std::pair<std::string, Value>(),  Skipper> __pair;
+    qi::rule<It, Value(),  Skipper> __value;
+    qi::rule<It, Object(), Skipper> __object;
+    qi::rule<It, Array(),  Skipper> __array;
+    qi::rule<It, Value()>       __number;
+    qi::rule<It, std::string()> __string;
+    qi::rule<It, std::string()> __char;
+    
+
+}    
+
+template <typename InputIterator, typename Delimiter = qi::unused_type> 
+struct json_generator: karma::grammar<InputIterator, Delimiter> {
+    json_generator(): json_generator::base_type(json) {
+        __symbols.add
+            (literal("false"), "false")
+            (literal("true"), "true")
+            (literal("null"), "null");
+            
+        __value = __symbols
+                | __object
+                | __array
+                | __number
+                | __string
+                ;
+                
+        __object = '{' << -(__pair % ',') << '}'
+                 ;
+        __pair = __string << ':' << __value
+               ;
+              
+        __array = '[' << -(value % ',') << ']'
+                ;
+              
+        __string = '"' << *__char << '"'
+                 ;
+         // TODO Unicode supporting
+        __char = +(~karma::char_('"', '\\')) [ karma::_val += karma::_1 ] 
+               | karma::char_('\\') >>                     
+                    ( karma::char_('"') [ karma::_val += '\\\"'  ] 
+                    | karma::char_('\\') [ karma::_val += '\\\\' ] 
+                    | karma::char_('/') [ karma::_val += '\\/'  ] 
+                    | karma::char_('b') [ karma::_val += '\\b' ] 
+                    | karma::char_('f') [ karma::_val += '\\f' ] 
+                    | karma::char_('n') [ karma::_val += '\\n' ] 
+                    | karma::char_('r') [ karma::_val += '\\r' ] 
+                    | karma::char_('t') [ karma::_val += '\\t' ] 
+                    )
+                ;
+        BOOST_SPIRIT_DEBUG_NODES(__symbols);
+        BOOST_SPIRIT_DEBUG_NODES(__pair);
+        BOOST_SPIRIT_DEBUG_NODES(__value);
+        BOOST_SPIRIT_DEBUG_NODES(__object);
+        BOOST_SPIRIT_DEBUG_NODES(__array);
+        BOOST_SPIRIT_DEBUG_NODES(__number);
+        BOOST_SPIRIT_DEBUG_NODES(__string);
+        BOOST_SPIRIT_DEBUG_NODES(__char);
+    }
+    
+    karma::symbols<literal, std::string> __symbols;
+    karma::rule<It, std::pair<std::string, Value>(),  Skipper> __pair;
+    karma::rule<It, Value(),  Delimiter> __value;
+    karma::rule<It, Object(), Delimiter> __object;
+    karma::rule<It, Array(),  Delimiter> __array;
+    karma::rule<It, Value()>       __number;
+    karma::rule<It, std::string()> __string;
+    karma::rule<It, std::string()> __char;
+}
+    
+} // end of namespace hjson
